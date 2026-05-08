@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 3.5)
 project(sdr-server)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
@@ -69,6 +69,9 @@ pkg_check_modules(PC_LIBHACKRF REQUIRED libhackrf)
 include_directories(${PC_LIBHACKRF_INCLUDE_DIRS})
 # libhackrf pkg config was invalid at some point
 include_directories("/usr/include/libhackrf/")
+
+# msisdr vendored include (needed by msisdr_lib.h and msisdr_device.h)
+include_directories("${CMAKE_CURRENT_SOURCE_DIR}/third_party/libmsisdr/include")
 
 pkg_check_modules(PC_LIBUSB REQUIRED libusb-1.0)
 include_directories(${PC_LIBUSB_INCLUDE_DIRS})

@@ -306,6 +306,7 @@ failed:
 }
 #endif
 
+#ifdef __ANDROID__
 int msisdr_open_fd (msisdr_dev_t **p, int fd, const char *devicePath) {
     msisdr_dev_t *dev = NULL;
     libusb_device *device = NULL;
@@ -344,6 +345,7 @@ int msisdr_open_fd (msisdr_dev_t **p, int fd, const char *devicePath) {
     return msisdr_setup(p, dev);
 }
 
+#endif /* __ANDROID__ */
 int msisdr_close (msisdr_dev_t *p) {
     if (!p) goto failed;
 
