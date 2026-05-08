@@ -11,6 +11,7 @@
 
 #include "sdr/airspy_device.h"
 #include "sdr/hackrf_device.h"
+#include "sdr/msisdr_device.h"
 #include "sdr/rtlsdr_device.h"
 
 struct sdr_device_t {
@@ -19,6 +20,7 @@ struct sdr_device_t {
   rtlsdr_lib *rtllib;
   airspy_lib *airspy;
   hackrf_lib *hackrf;
+  msisdr_lib *msisdr;
   void (*sdr_callback)(uint8_t *buf, uint32_t buf_len, void *ctx);
   void *ctx;
 
@@ -61,6 +63,13 @@ int sdr_device_create(void (*sdr_callback)(uint8_t *buf, uint32_t buf_len, void 
       result->stop_rx = hackrf_device_stop_rx;
       break;
     }
+    case SDR_TYPE_MSI: {
+      code = msisdr_lib_create(&result->msisdr);
+      result->destroy = msisdr_device_destroy;
+      result->start_rx = msisdr_device_start_rx;
+      result->stop_rx = msisdr_device_stop_rx;
+      break;
+    }
     default: {
       fprintf(stderr, "<3>unsupported sdr type: %d\n", server_config->sdr_type);
       code = -1;
@@ -89,6 +98,10 @@ int sdr_device_start(client_config *config, sdr_device *device) {
       }
       case SDR_TYPE_HACKRF: {
         code = hackrf_device_create(device->server_config, device->hackrf, device->sdr_callback, device->ctx, &device->plugin);
+        break;
+      }
+      case SDR_TYPE_MSI: {
+        code = msisdr_device_create(device->server_config, device->msisdr, device->sdr_callback, device->ctx, &device->plugin);
         break;
       }
       default: {
@@ -132,6 +145,9 @@ void sdr_device_destroy(sdr_device *device) {
   }
   if (device->hackrf != NULL) {
     hackrf_lib_destroy(device->hackrf);
+  }
+  if (device->msisdr != NULL) {
+    msisdr_lib_destroy(device->msisdr);
   }
   fprintf(stdout, "sdr destroyed\n");
   free(device);

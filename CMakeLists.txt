@@ -18,6 +18,18 @@ elseif(CMAKE_BUILD_TYPE MATCHES Release)
 endif()
 add_definitions(-DCMAKE_C_FLAGS="${CMAKE_C_FLAGS} ${BUILD_COMPILATION_FLAGS}")
 
+# vendored libmsisdr (uses system libusb-1.0, not the Android fork)
+add_library(msisdrLib STATIC
+		${CMAKE_CURRENT_SOURCE_DIR}/third_party/libmsisdr/src/libmsisdr.c
+)
+target_include_directories(msisdrLib PUBLIC
+		${CMAKE_CURRENT_SOURCE_DIR}/third_party/libmsisdr/include
+)
+target_include_directories(msisdrLib PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/third_party/libmsisdr/src
+)
+set_target_properties(msisdrLib PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 add_library(sdr_serverLib
 		${CMAKE_CURRENT_SOURCE_DIR}/src/config.c
 		${CMAKE_CURRENT_SOURCE_DIR}/src/sdr_device.c
@@ -30,6 +42,7 @@ add_library(sdr_serverLib
 		${CMAKE_CURRENT_SOURCE_DIR}/src/sdr/airspy_device.c
 		${CMAKE_CURRENT_SOURCE_DIR}/src/sdr/rtlsdr_device.c
 		${CMAKE_CURRENT_SOURCE_DIR}/src/sdr/hackrf_device.c
+		${CMAKE_CURRENT_SOURCE_DIR}/src/sdr/msisdr_device.c
 )
 
 # at some point homebrew changed default location
@@ -57,6 +70,12 @@ include_directories(${PC_LIBHACKRF_INCLUDE_DIRS})
 # libhackrf pkg config was invalid at some point
 include_directories("/usr/include/libhackrf/")
 
+pkg_check_modules(PC_LIBUSB REQUIRED libusb-1.0)
+include_directories(${PC_LIBUSB_INCLUDE_DIRS})
+link_directories(${PC_LIBUSB_LIBRARY_DIRS})
+target_include_directories(msisdrLib PRIVATE ${PC_LIBUSB_INCLUDE_DIRS})
+target_link_libraries(msisdrLib ${PC_LIBUSB_LIBRARIES})
+
 pkg_check_modules(PC_ZLIB REQUIRED zlib)
 include_directories(${PC_ZLIB_INCLUDE_DIRS})
 link_directories(${PC_ZLIB_LIBRARY_DIRS})
@@ -68,7 +87,7 @@ link_directories(${PC_LIBCONFIG_LIBRARY_DIRS})
 target_link_libraries(sdr_serverLib ${PC_LIBCONFIG_LIBRARIES})
 
 find_package(Threads REQUIRED)
-target_link_libraries(sdr_serverLib m ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(sdr_serverLib m ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT} msisdrLib ${PC_LIBUSB_LIBRARIES})
 
 # link real libraries into final executable so that tests can use mocks
 add_executable(sdr_server
@@ -76,8 +95,9 @@ add_executable(sdr_server
 		${CMAKE_CURRENT_SOURCE_DIR}/src/sdr/rtlsdr_lib.c
 		${CMAKE_CURRENT_SOURCE_DIR}/src/sdr/airspy_lib.c
 		${CMAKE_CURRENT_SOURCE_DIR}/src/sdr/hackrf_lib.c
+		${CMAKE_CURRENT_SOURCE_DIR}/src/sdr/msisdr_lib.c
 )
-target_link_libraries(sdr_server sdr_serverLib)
+target_link_libraries(sdr_server sdr_serverLib msisdrLib)
 
 add_executable(sdr_server_client
 		${CMAKE_CURRENT_SOURCE_DIR}/src/client/tcp_client.c
@@ -102,6 +122,7 @@ add_library(sdr_serverTestLib
 		${CMAKE_CURRENT_SOURCE_DIR}/test/rtlsdr_lib_mock.c
 		${CMAKE_CURRENT_SOURCE_DIR}/test/airspy_lib_mock.c
 		${CMAKE_CURRENT_SOURCE_DIR}/test/hackrf_lib_mock.c
+		${CMAKE_CURRENT_SOURCE_DIR}/test/msisdr_lib_mock.c
 		${CMAKE_CURRENT_SOURCE_DIR}/src/client/tcp_client.c
 		${CMAKE_CURRENT_SOURCE_DIR}/test/utils.c
 		${CMAKE_CURRENT_SOURCE_DIR}/test/unity-2.5.2/src/unity.c

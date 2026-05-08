@@ -14,7 +14,8 @@
  * Output will be decimated to the requested bandwidth
  * Clients can request overlapping RF spectrum
  * Rtl-sdr starts only after first client connects (i.e. saves solar power &etc). Stops only when the last client disconnects
- * MacOS and Linux (Debian Raspberrypi)
+ * macOS and Linux (Debian, Raspberry Pi)
+ * **MSi SDR support** — MSi2500/MSi001-based dongles (VID 0x1df7) via bundled libmsisdr
  
 ## Design
 
@@ -22,7 +23,7 @@
 
  * Each client has its own dsp thread
  * Each dsp thread executes [Frequency Xlating FIR Filter](http://blog.sdr.hu/grblocks/xlating-fir.html)
- * Only RTL-SDRs are supported
+ * Supported hardware: RTL-SDR, Airspy, HackRF, **MSi SDR (MSi2500/MSi001)**
  
 ## API
 
@@ -65,6 +66,19 @@ sdr-server depends on several libraries:
  * [libconfig](https://hyperrealm.github.io/libconfig/libconfig_manual.html)
  * libz. Should be installed in every operational system
  * libm. Same
+ * **libusb-1.0** — required for MSi SDR support (`sudo apt install libusb-1.0-0-dev`). The MSi SDR driver (libmsisdr) is **vendored** in `third_party/` — no separate install needed.
+
+### MSi SDR supported devices (`sdr_type=3`)
+
+| VID:PID    | Device                          |
+|------------|---------------------------------|
+| 1df7:2500  | Mirics MSi2500 / RSP1C          |
+| 2040:d300  | Hauppauge WinTV 133559 LF       |
+| 07ca:8591  | AverMedia A859 Pure DVBT        |
+| 04bb:0537  | IO-DATA GV-TV100                |
+| 0511:0037  | Logitec LDT-1S310U/J            |
+
+> **Note:** SDRplay RSP1A (1df7:3000) and RSP2 (1df7:3010) are **not supported** in direct USB mode — they require the proprietary SDRplay API which is not available on Linux. Use [RSPTCPServer](https://github.com/SDRplay/RSPTCPServer) on a PC and connect the `sdr_server_client` to it.
  
 All dependencies can be easily installed from [leosatdata APT repository](https://leosatdata.com/apt):
 
@@ -76,15 +90,25 @@ sudo apt-get update
 sudo apt-get install librtlsdr-dev libconfig-dev
 ```
 
-## Build
+## Build & Run
 
-To build the project execute the following commands:
+Convenience scripts are provided in the project root:
+
+```bash
+./build.sh          # Release build (default)
+./build.sh Debug    # Debug build with coverage
+./run.sh            # Run with default config (src/resources/config.conf)
+./run.sh /path/to/my.conf  # Run with custom config
+./test.sh           # Debug build + run test suite
+```
+
+Or manually:
 
 ```
-mkdir build
-cd build
+mkdir build && cd build
 cmake ..
 make
+./sdr_server /path/to/config.conf
 ```
 
 ## Install

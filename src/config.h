@@ -7,7 +7,8 @@
 typedef enum {
   SDR_TYPE_RTL = 0,
   SDR_TYPE_AIRSPY = 1,
-  SDR_TYPE_HACKRF = 2
+  SDR_TYPE_HACKRF = 2,
+  SDR_TYPE_MSI = 3    /* MSi2500/MSi001 (libmsisdr, vendored) */
 } sdr_type_t;
 
 typedef enum {
@@ -57,6 +58,13 @@ struct server_config {
   int hackrf_amp;
   int hackrf_lna_gain;
   int hackrf_vga_gain;
+
+  // msisdr settings (sdr_type=3)
+  int msisdr_gain;        /* tuner gain 0..102 dB (default 40) */
+  int msisdr_gain_mode;   /* 0=auto, 1=manual (default 1) */
+  int msisdr_if_freq;     /* IF freq Hz: 0=zero-IF, 450000, 1620000, 2048000 */
+  uint32_t msisdr_bandwidth; /* filter BW Hz: 0=8 MHz auto */
+  int msisdr_hw_flavour;  /* 0=default (MSi2500), 1=RSP1A (clears FM notch) */
 
   // output settings
   char *base_path;

@@ -5,6 +5,7 @@
 #include "../src/tcp_server.h"
 #include "airspy_lib_mock.h"
 #include "hackrf_lib_mock.h"
+#include "msisdr_lib_mock.h"
 #include "rtlsdr_lib_mock.h"
 #include "utils.h"
 
@@ -247,6 +248,38 @@ void test_hackrf() {
   server = NULL;
 }
 
+void test_msisdr() {
+  TEST_ASSERT_EQUAL_INT(0, create_server_config(&config, "tcp_server.config"));
+  config->sdr_type = SDR_TYPE_MSI;
+  config->band_sampling_rate = 48000;
+  config->msisdr_gain_mode = 1;
+  config->msisdr_gain = 40;
+  TEST_ASSERT_EQUAL_INT(0, start_tcp_server(config, &server));
+
+  TEST_ASSERT_EQUAL_INT(0, create_client(config->bind_address, config->port, &client0));
+  send_message(client0, PROTOCOL_VERSION, TYPE_REQUEST, -12000 + 460100200, 9600, 460100200, REQUEST_DESTINATION_SOCKET);
+  assert_response(client0, TYPE_RESPONSE, RESPONSE_STATUS_SUCCESS, 0);
+
+  /* MSi SDR delivers CS16 samples — use the same setup_input_cs16 helper
+   * and the same expected values as test_airspy (identical DSP path). */
+  int length = 200;
+  setup_input_cs16(&input_cs16, 0, length);
+  msisdr_setup_mock_data(input_cs16, length);
+  msisdr_wait_for_data_read();
+
+  const float expected[] = {-0.000000f, -0.000000f, -0.000002f, -0.000002f, 0.000007f, 0.000004f, -0.000015f, -0.000009f, 0.000031f, 0.000020f, -0.000075f, -0.000043f, 0.000013f, -0.000639f, 0.000047f, 0.000074f, -0.000022f, -0.000031f, 0.000010f, 0.000014f, -0.000004f, -0.000006f, 0.000002f, 0.000002f, -0.000001f, -0.000001f, 0.000000f, -0.000001f, 0.000000f, 0.000000f, -0.000000f, 0.000000f, 0.000000f, 0.000000f, -0.000000f, 0.000000f, -0.000000f, -0.000000f, 0.000001f, -0.000001f};
+  float *actual = malloc(sizeof(expected));
+  TEST_ASSERT(actual != NULL);
+  TEST_ASSERT_EQUAL_INT(0, read_data(actual, sizeof(expected), client0));
+  assert_float_array(expected, sizeof(expected) / sizeof(float), actual, sizeof(expected) / sizeof(float));
+  free(actual);
+
+  msisdr_stop_mock();
+  stop_tcp_server(server);
+  join_tcp_server_thread(server);
+  server = NULL;
+}
+
 void test_ping() {
   create_and_init_tcpserver();
 
@@ -255,6 +288,7 @@ void test_ping() {
 }
 
 void tearDown() {
+  msisdr_stop_mock();
   rtlsdr_stop_mock();
   stop_tcp_server(server);
   join_tcp_server_thread(server);
@@ -296,6 +330,7 @@ int main(void) {
   RUN_TEST(test_rtlsdr);
   RUN_TEST(test_airspy);
   RUN_TEST(test_hackrf);
+  RUN_TEST(test_msisdr);
   RUN_TEST(test_out_of_band_frequency_clients);
   RUN_TEST(test_ping);
   return UNITY_END();

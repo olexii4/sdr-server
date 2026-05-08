@@ -180,6 +180,18 @@ int create_server_config(struct server_config **config, const char *path) {
     return -1;
   }
 
+  result->msisdr_gain_mode = config_read_int(&libconfig, "msisdr_gain_mode", 1);
+  result->msisdr_gain = config_read_int(&libconfig, "msisdr_gain", 40);
+  if (result->msisdr_gain < 0 || result->msisdr_gain > 102) {
+    fprintf(stderr, "<3>invalid msisdr_gain: must be 0..102\n");
+    config_destroy(&libconfig);
+    free(result);
+    return -1;
+  }
+  result->msisdr_if_freq = config_read_int(&libconfig, "msisdr_if_freq", 0);
+  result->msisdr_bandwidth = config_read_uint32_t(&libconfig, "msisdr_bandwidth", 0);
+  result->msisdr_hw_flavour = config_read_int(&libconfig, "msisdr_hw_flavour", 0);
+
   result->queue_size = config_read_int(&libconfig, "queue_size", 64);
   if (result->queue_size <= 0) {
     fprintf(stderr, "<3>queue size should be positive: %d\n", result->queue_size);
