@@ -107,6 +107,16 @@ add_executable(sdr_server_client
 		${CMAKE_CURRENT_SOURCE_DIR}/src/client/tcp_client_main.c
 )
 
+# rtl_tcp-compatible server: phone apps (SDR++, sdrtouch) connect directly
+add_executable(rtltcp_server
+		${CMAKE_CURRENT_SOURCE_DIR}/src/rtltcp_server.c
+)
+target_include_directories(rtltcp_server PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/third_party/libmsisdr/include
+		${PC_LIBUSB_INCLUDE_DIRS}
+)
+target_link_libraries(rtltcp_server msisdrLib ${PC_LIBUSB_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} m)
+
 install(TARGETS sdr_server DESTINATION /usr/bin/)
 install(TARGETS sdr_server_client DESTINATION /usr/bin/)
 install(FILES src/resources/config.conf DESTINATION /etc/sdr-server/)
