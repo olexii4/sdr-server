@@ -217,24 +217,53 @@ static void *client_cmd_thread(void *arg) {
     return NULL;
 }
 
+/* Helper — open and configure the device (called at startup and on restart) */
+static int device_open_and_configure(int dev_idx) {
+    for (int att = 0; att < 5 && !g_stop; att++) {
+        if (msisdr_open(&g_dev.dev, (uint32_t)dev_idx) == 0) break;
+        fprintf(stderr, "device open failed (attempt %d/5)...\n", att + 1);
+        sleep(1);
+        g_dev.dev = NULL;
+    }
+    if (!g_dev.dev) return -1;
+    msisdr_rsp1a_gpio_init(g_dev.dev);
+    msisdr_set_hw_flavour(g_dev.dev, MSISDR_HW_DEFAULT);
+    msisdr_set_sample_format(g_dev.dev, "AUTO");
+    msisdr_set_if_freq(g_dev.dev, 0);
+    msisdr_set_bandwidth(g_dev.dev, 8000000);
+    msisdr_set_sample_rate(g_dev.dev, g_dev.sample_rate);
+    msisdr_set_center_freq(g_dev.dev, g_dev.center_freq);
+    msisdr_set_tuner_gain_mode(g_dev.dev, g_dev.gain_mode);
+    msisdr_set_tuner_gain(g_dev.dev, g_dev.gain);
+    msisdr_reset_buffer(g_dev.dev);
+    fprintf(stdout, "MSi SDR opened — streaming: %u Hz, gain %d dB, %u S/s\n\n",
+            g_dev.center_freq, g_dev.gain, g_dev.sample_rate);
+    return 0;
+}
+
 /* ── USB streaming thread ────────────────────────────────────────── */
 static void *usb_stream_thread(void *arg) {
-    (void)arg;
-    /* Auto-restart streaming on failure (overflow, endpoint stall, etc).
-     * Each call to msisdr_read_async re-initialises the macOS endpoint
-     * (clear_halt + streaming_start) so restarts recover cleanly. */
+    int dev_idx = *(int *)arg;
+    free(arg);
     while (!g_stop) {
         g_dev.dc_avg_i = 0.0f;
         g_dev.dc_avg_q = 0.0f;
-        /* msisdr_read_sync_stream: one libusb_bulk_transfer at a time.
-         * 512 KB buffer — macOS IOUSBLib aggregates many USB micro-packets
-         * into one super-packet; the buffer must be large enough to hold
-         * whatever the OS hands us, otherwise LIBUSB_ERROR_OVERFLOW. */
-        int r = msisdr_read_sync_stream(g_dev.dev, msisdr_callback, NULL,
-                                        524288);
+        /* buf_num=1: single in-flight transfer — no concurrent cancel races. */
+        int r = msisdr_read_async(g_dev.dev, msisdr_callback, NULL,
+                                  1, SEND_BUF_SAMPLES * 2);
         if (g_stop) break;
-        fprintf(stderr, "streaming stopped (r=%d) — restarting in 1s...\n", r);
-        sleep(1);
+        fprintf(stderr, "streaming stopped (r=%d) — reopening device...\n", r);
+        /* Close and fully reopen: the only reliable way to clear a stale
+         * USB endpoint on macOS (libusb_clear_halt alone is not enough). */
+        msisdr_close(g_dev.dev);
+        g_dev.dev = NULL;
+        /* Retry reopen immediately with backoff */
+        for (int wait = 1; wait <= 10 && !g_stop; wait++) {
+            sleep(wait);
+            if (device_open_and_configure(dev_idx) == 0) break;
+            fprintf(stderr, "device reopen failed — retry in %ds...\n", wait + 1);
+            msisdr_close(g_dev.dev); g_dev.dev = NULL;
+        }
     }
     return NULL;
 }
@@ -369,45 +398,20 @@ int main(int argc, char *argv[]) {
         local_ip, port, local_ip, port, local_ip, port,
         g_dev.sample_rate, g_dev.gain, dev_idx);
 
-    /* Open device with retry */
-    {
-        int opened = 0;
-        for (int attempt = 0; attempt < 5 && !g_stop; attempt++) {
-            if (msisdr_open(&g_dev.dev, (uint32_t)dev_idx) == 0) {
-                opened = 1; break;
-            }
-            if (attempt == 0)
-                fprintf(stderr,
-                    "\n*** MSi SDR device not found — is the dongle plugged in? ***\n"
-                    "    Retrying...\n\n");
-            sleep(1);
-        }
-        if (!opened) {
-            fprintf(stderr,
-                "ERROR: MSi SDR device %d not found.\n"
-                "  Plug the dongle into a Mac USB port and re-run.\n", dev_idx);
-            close(lsock);
-            return 1;
-        }
+    /* Open and configure device for the first time */
+    if (device_open_and_configure(dev_idx) < 0) {
+        fprintf(stderr,
+            "ERROR: MSi SDR device %d not found.\n"
+            "  Plug the dongle into a Mac USB port and re-run.\n", dev_idx);
+        close(lsock);
+        return 1;
     }
 
-    /* Configure device */
-    msisdr_rsp1a_gpio_init(g_dev.dev);
-    msisdr_set_hw_flavour(g_dev.dev, MSISDR_HW_DEFAULT);
-    msisdr_set_sample_format(g_dev.dev, "AUTO");
-    msisdr_set_if_freq(g_dev.dev, 0);
-    msisdr_set_bandwidth(g_dev.dev, 8000000);
-    msisdr_set_sample_rate(g_dev.dev, g_dev.sample_rate);
-    msisdr_set_center_freq(g_dev.dev, g_dev.center_freq);
-    msisdr_set_tuner_gain_mode(g_dev.dev, 1);
-    msisdr_set_tuner_gain(g_dev.dev, g_dev.gain);
-    msisdr_reset_buffer(g_dev.dev);
-    fprintf(stdout, "MSi SDR opened — streaming: %u Hz, gain %d dB, %u S/s\n\n",
-            g_dev.center_freq, g_dev.gain, g_dev.sample_rate);
-
-    /* Start USB streaming thread */
+    /* Start USB streaming thread — pass dev_idx so it can reopen the device */
     pthread_t usb_tid;
-    pthread_create(&usb_tid, NULL, usb_stream_thread, NULL);
+    int *dev_idx_arg = malloc(sizeof(int));
+    *dev_idx_arg = dev_idx;
+    pthread_create(&usb_tid, NULL, usb_stream_thread, dev_idx_arg);
 
     /* Accept clients */
     while (!g_stop) {

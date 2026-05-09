@@ -543,9 +543,10 @@ retry_transfer:
                 p->transfer = MSISDR_TRANSFER_BULK;
                 goto retry_transfer;
             }
-            /* For BULK failures: free unsubmitted transfers (i..N-1) and null them out
-             * so that the failed_free cancel loop only touches submitted transfers 0..i-1.
-             * Calling libusb_cancel_transfer on unsubmitted transfers is UB and crashes. */
+            /* Null out unsubmitted transfer slots (i..N-1) so that the
+             * failed_free cancel loop only touches slots that were actually
+             * submitted (0..i-1).  Calling libusb_cancel_transfer on a
+             * non-submitted transfer is UB → SIGSEGV. */
             {
                 size_t j;
                 for (j = i; j < p->xfer_buf_num; j++) {
