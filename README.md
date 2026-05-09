@@ -118,3 +118,40 @@ sdr-server can be installed from [leosatdata APT repository](https://leosatdata.
 ```
 sudo apt-get install sdr-server
 ```
+
+## MSi SDR Ecosystem — rtl_tcp on Port 1234
+
+All components use the standard **rtl_tcp protocol on port 1234** so any rtl_tcp-capable app can connect without configuration.
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Option A: MSi SDR dongle plugged into Mac              │
+│                                                         │
+│  MSi SDR USB → rtltcp_server (0.0.0.0:1234) → WiFi    │
+│                       ↓                                 │
+│           Phone SDR app (SDR++, sdrtouch)               │
+│           connects to Mac IP:1234                       │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│  Option B: MSi SDR dongle plugged into Android phone    │
+│                                                         │
+│  MSi SDR USB → sdr-msi-driver (0.0.0.0:1234)           │
+│                       ↓                                 │
+│           sdrtouch on same phone (127.0.0.1:1234)       │
+│           — or —                                        │
+│           SDR++ on another device (phone WiFi IP:1234)  │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Quick start (Mac → Phone)
+
+```bash
+# Start the rtl_tcp server on Mac (MSi SDR plugged in via USB)
+cd sdr-server && ./run.sh
+
+# On phone: open SDR++ → Source → RTL-TCP → <Mac IP>:1234
+# On phone: open sdrtouch → Start → <Mac IP>:1234
+```
+
+The server prints the Mac's local WiFi IP at startup. The sdr-msi-driver Android app shows the phone's WiFi IP in the notification when serving.
