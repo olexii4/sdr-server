@@ -30,6 +30,7 @@
  *                      [-r sample_rate] [-f center_freq]
  */
 
+#include "logger.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -164,7 +165,7 @@ static void *client_cmd_thread(void *arg) {
         switch (cmd.cmd) {
             case 0x01: /* SET_FREQ */
                 g_dev.center_freq = param;
-                fprintf(stdout, "[client %d] set_freq %u Hz\n", slot, param);
+                log_info("[client %d] set_freq %u Hz\n", slot, param);
                 if (g_dev.dev) msisdr_set_center_freq(g_dev.dev, param);
                 break;
             case 0x02: /* SET_SAMPLE_RATE */
@@ -177,13 +178,13 @@ static void *client_cmd_thread(void *arg) {
                     if (applied < 1300000)  applied = 1300000;
                     if (applied > 15000000) applied = 15000000;
                     if (applied != param)
-                        fprintf(stderr,
+                        log_err(
                             "[client %d] set_sample_rate %u clamped to %u S/s\n"
                             "  -> In SDR++ set sample rate to 2.048MHz or 2.4MHz "
                             "for best audio quality\n",
                             slot, param, applied);
                     else
-                        fprintf(stdout, "[client %d] set_sample_rate %u S/s\n",
+                        log_info("[client %d] set_sample_rate %u S/s\n",
                                 slot, applied);
                     g_dev.sample_rate = applied;
                     msisdr_set_sample_rate(g_dev.dev, applied);
@@ -195,7 +196,7 @@ static void *client_cmd_thread(void *arg) {
                 break;
             case 0x04: /* SET_GAIN (tenths of dB) */
                 g_dev.gain = (int)(param / 10);
-                fprintf(stdout, "[client %d] set_gain %.1f dB\n", slot, param / 10.0);
+                log_info("[client %d] set_gain %.1f dB\n", slot, param / 10.0);
                 if (g_dev.dev && g_dev.gain_mode == 1)
                     msisdr_set_tuner_gain(g_dev.dev, g_dev.gain);
                 break;
@@ -208,7 +209,7 @@ static void *client_cmd_thread(void *arg) {
     }
 
     /* Client disconnected */
-    fprintf(stdout, "client %d disconnected\n", slot);
+    log_info("client %d disconnected\n", slot);
     pthread_mutex_lock(&g_clients_mtx);
     close(sock);                           /* safe here — we own this sock */
     g_clients[slot].sock = -1;
@@ -221,7 +222,7 @@ static void *client_cmd_thread(void *arg) {
 static int device_open_and_configure(int dev_idx) {
     for (int att = 0; att < 5 && !g_stop; att++) {
         if (msisdr_open(&g_dev.dev, (uint32_t)dev_idx) == 0) break;
-        fprintf(stderr, "device open failed (attempt %d/5)...\n", att + 1);
+        log_err("device open failed (attempt %d/5)...\n", att + 1);
         sleep(1);
         g_dev.dev = NULL;
     }
@@ -236,7 +237,7 @@ static int device_open_and_configure(int dev_idx) {
     msisdr_set_tuner_gain_mode(g_dev.dev, g_dev.gain_mode);
     msisdr_set_tuner_gain(g_dev.dev, g_dev.gain);
     msisdr_reset_buffer(g_dev.dev);
-    fprintf(stdout, "MSi SDR opened — streaming: %u Hz, gain %d dB, %u S/s\n\n",
+    log_info("MSi SDR opened — streaming: %u Hz, gain %d dB, %u S/s\n\n",
             g_dev.center_freq, g_dev.gain, g_dev.sample_rate);
     return 0;
 }
@@ -252,7 +253,7 @@ static void *usb_stream_thread(void *arg) {
         int r = msisdr_read_async(g_dev.dev, msisdr_callback, NULL,
                                   1, SEND_BUF_SAMPLES * 2);
         if (g_stop) break;
-        fprintf(stderr, "streaming stopped (r=%d) — reopening device...\n", r);
+        log_err("streaming stopped (r=%d) — reopening device...\n", r);
         /* Close and fully reopen: the only reliable way to clear a stale
          * USB endpoint on macOS (libusb_clear_halt alone is not enough). */
         msisdr_close(g_dev.dev);
@@ -261,7 +262,7 @@ static void *usb_stream_thread(void *arg) {
         for (int wait = 1; wait <= 10 && !g_stop; wait++) {
             sleep(wait);
             if (device_open_and_configure(dev_idx) == 0) break;
-            fprintf(stderr, "device reopen failed — retry in %ds...\n", wait + 1);
+            log_err("device reopen failed — retry in %ds...\n", wait + 1);
             msisdr_close(g_dev.dev); g_dev.dev = NULL;
         }
     }
@@ -314,22 +315,28 @@ int main(int argc, char *argv[]) {
         g_clients[i].sock = -1; g_clients[i].tid = 0; g_client_fds[i] = -1;
     }
 
+    const char *logfile = NULL;
     int opt;
-    while ((opt = getopt(argc, argv, "p:d:g:r:f:h")) != -1) {
+    while ((opt = getopt(argc, argv, "p:d:g:r:f:l:h")) != -1) {
         switch (opt) {
             case 'p': port           = atoi(optarg); break;
             case 'd': dev_idx        = atoi(optarg); break;
             case 'g': g_dev.gain     = atoi(optarg); break;
             case 'r': g_dev.sample_rate = (uint32_t)atoi(optarg); break;
             case 'f': g_dev.center_freq = (uint32_t)atoi(optarg); break;
+            case 'l': logfile        = optarg; break;
             default:
                 fprintf(stderr,
                     "Usage: %s [-p port] [-d device] [-g gain_dB] "
-                    "[-r sample_rate] [-f center_freq_Hz]\n",
-                    argv[0]);
+                    "[-r sample_rate] [-f center_freq_Hz] "
+                    "[-l logfile]\n", argv[0]);
                 return 1;
         }
     }
+
+    /* Initialise logger: syslog (OS-standard) + optional rotating file.
+     * Default max file size = 5 MB; rotate to <logfile>.old when exceeded. */
+    log_init(logfile, LOG_MAX_BYTES_DEFAULT);
 
     /* Use sigaction (not signal) so SA_RESTART is NOT set.
      * With signal() on macOS, blocked syscalls (accept, recv) are
@@ -382,7 +389,7 @@ int main(int argc, char *argv[]) {
     }
     if (!local_ip[0]) strcpy(local_ip, "(run 'ifconfig' to find your IP)");
 
-    fprintf(stdout,
+    log_info(
         "============================================\n"
         "  rtl_tcp server for MSi SDR  (up to %d clients)\n"
         "============================================\n"
@@ -400,7 +407,7 @@ int main(int argc, char *argv[]) {
 
     /* Open and configure device for the first time */
     if (device_open_and_configure(dev_idx) < 0) {
-        fprintf(stderr,
+        log_err(
             "ERROR: MSi SDR device %d not found.\n"
             "  Plug the dongle into a Mac USB port and re-run.\n", dev_idx);
         close(lsock);
@@ -435,7 +442,7 @@ int main(int argc, char *argv[]) {
 
         if (slot < 0) {
             pthread_mutex_unlock(&g_clients_mtx);
-            fprintf(stderr, "max %d clients already connected — rejecting\n",
+            log_err("max %d clients already connected — rejecting\n",
                     MAX_CLIENTS);
             close(csock);
             continue;
@@ -457,7 +464,7 @@ int main(int argc, char *argv[]) {
         g_client_fds[slot]   = csock;     /* signal handler can shutdown this */
         pthread_mutex_unlock(&g_clients_mtx);
 
-        fprintf(stdout, "client %d connected from %s\n",
+        log_info("client %d connected from %s\n",
                 slot, inet_ntoa(caddr.sin_addr));
 
         /* Start per-client command thread — NOT detached so we can join it
@@ -486,6 +493,7 @@ int main(int argc, char *argv[]) {
 
     msisdr_close(g_dev.dev);
     /* lsock was already closed by the signal handler */
-    fprintf(stdout, "server stopped\n");
+    log_info("server stopped\n");
+    log_close();
     return 0;
 }

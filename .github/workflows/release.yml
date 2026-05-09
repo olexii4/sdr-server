@@ -1,0 +1,159 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.0.0)'
+        required: true
+
+jobs:
+  build-linux:
+    name: Build (Linux x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake pkg-config \
+            libusb-1.0-0-dev \
+            libconfig-dev \
+            zlib1g-dev \
+            librtlsdr-dev \
+            libairspy-dev \
+            libhackrf-dev
+
+      - name: Build rtltcp_server
+        run: |
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          cmake --build . --target rtltcp_server -j$(nproc)
+          strip rtltcp_server
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp build/rtltcp_server dist/rtltcp_server-linux-x86_64
+          cp run.sh dist/
+          tar -czf rtltcp_server-linux-x86_64.tar.gz -C dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rtltcp_server-linux-x86_64
+          path: rtltcp_server-linux-x86_64.tar.gz
+          retention-days: 1
+
+  build-macos:
+    name: Build (macOS arm64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          brew install cmake pkg-config libusb libconfig zlib \
+                       librtlsdr airspy hackrf
+
+      - name: Build rtltcp_server
+        run: |
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          cmake --build . --target rtltcp_server -j$(sysctl -n hw.logicalcpu)
+          strip rtltcp_server
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp build/rtltcp_server dist/rtltcp_server-macos-arm64
+          cp run.sh dist/
+          tar -czf rtltcp_server-macos-arm64.tar.gz -C dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rtltcp_server-macos-arm64
+          path: rtltcp_server-macos-arm64.tar.gz
+          retention-days: 1
+
+  release:
+    name: Create GitHub Release
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Compute metadata
+        id: meta
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          TAG="${REF_NAME:-$INPUT_TAG}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA::8}" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          prerelease: false
+          body: |
+            ## rtl_tcp server for MSi SDR  —  ${{ steps.meta.outputs.tag }}
+
+            Serves IQ data from an **MSi2500/MSi001 USB dongle** (MSi SDR, SDRplay RSP1A clones)
+            over the standard **rtl_tcp protocol** on port `1234`.
+
+            Any rtl_tcp client works: **SDR++**, **sdrtouch**, **HDSDR**, **gqrx** …
+
+            ### Quick start
+
+            ```bash
+            # macOS
+            tar xf rtltcp_server-macos-arm64.tar.gz
+            ./run.sh -f 103900000 -g 60        # 103.9 MHz FM, gain 60 dB
+
+            # Linux
+            tar xf rtltcp_server-linux-x86_64.tar.gz
+            ./run.sh -f 103900000 -g 60
+            ```
+
+            Connect from your phone / SDR app on the same WiFi:
+
+            | App | Setting |
+            |-----|---------|
+            | **SDR++** | Source → RTL-TCP → `<Mac IP>:1234` · sample rate **2.4 MHz** |
+            | **sdrtouch** | Start → `<Mac IP>:1234` |
+
+            ### Options
+
+            | Flag | Default | Description |
+            |------|---------|-------------|
+            | `-f Hz` | 100000000 | Centre frequency |
+            | `-g dB` | 40 | Tuner gain (0–102) |
+            | `-r S/s` | 2400000 | Sample rate |
+            | `-p port` | 1234 | TCP port |
+            | `-d idx` | 0 | Device index |
+            | `-l file` | — | Log file (max 5 MB, rotated to .old) |
+
+            **Commit:** ${{ steps.meta.outputs.sha }} · **Built:** ${{ steps.meta.outputs.date }}
+          files: |
+            artifacts/rtltcp_server-linux-x86_64/rtltcp_server-linux-x86_64.tar.gz
+            artifacts/rtltcp_server-macos-arm64/rtltcp_server-macos-arm64.tar.gz

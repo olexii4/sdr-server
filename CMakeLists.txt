@@ -110,6 +110,7 @@ add_executable(sdr_server_client
 # rtl_tcp-compatible server: phone apps (SDR++, sdrtouch) connect directly
 add_executable(rtltcp_server
 		${CMAKE_CURRENT_SOURCE_DIR}/src/rtltcp_server.c
+		${CMAKE_CURRENT_SOURCE_DIR}/src/logger.c
 )
 target_include_directories(rtltcp_server PRIVATE
 		${CMAKE_CURRENT_SOURCE_DIR}/third_party/libmsisdr/include
