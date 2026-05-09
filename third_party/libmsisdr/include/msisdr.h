@@ -68,8 +68,14 @@ MSISDR_API int msisdr_rsp1a_gpio_init (msisdr_dev_t *p); /* clear notch filters,
 /* sync */
 MSISDR_API int msisdr_read_sync (msisdr_dev_t *p, void *buf, int len, int *n_read);
 
-/* async */
+/* sync stream — stable single-transfer loop (use instead of msisdr_read_async
+ * on macOS where the async path has endpoint-stall / overflow issues).
+ * Stop with msisdr_cancel_async() from another thread. */
 typedef void(*msisdr_read_async_cb_t) (unsigned char *buf, uint32_t len, void *ctx);
+MSISDR_API int msisdr_read_sync_stream (msisdr_dev_t *p, msisdr_read_async_cb_t cb,
+                                        void *ctx, uint32_t buf_len);
+
+/* async */
 MSISDR_API int msisdr_read_async (msisdr_dev_t *p, msisdr_read_async_cb_t cb, void *ctx, uint32_t num, uint32_t len);
 MSISDR_API int msisdr_cancel_async (msisdr_dev_t *p);
 MSISDR_API int msisdr_cancel_async_now (msisdr_dev_t *p);            /* extra */

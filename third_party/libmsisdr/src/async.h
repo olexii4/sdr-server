@@ -20,7 +20,13 @@
 #define DEFAULT_ISO_PACKETS     8
 #define DEFAULT_ISO_TIMEOUT     1000
 
-#define DEFAULT_BULK_BUFFER     16384
+/* macOS IOUSBLib aggregates USB packets into larger transfers — 65536 avoids
+ * overflow on startup. Linux keeps the original 16384. */
+#if defined(__APPLE__)
+#  define DEFAULT_BULK_BUFFER   65536
+#else
+#  define DEFAULT_BULK_BUFFER   16384
+#endif
 #define DEFAULT_BULK_TIMEOUT    1000
 
 #define DEFAULT_BUF_NUMBER      32

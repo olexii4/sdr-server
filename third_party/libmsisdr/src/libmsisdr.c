@@ -110,29 +110,18 @@ int msisdr_rsp1a_gpio_init(msisdr_dev_t *p)
 #include "streaming.c"
 #include "soft.c"
 #include "sync.c"
+#include "sync_stream.c"
 
 int msisdr_setup (msisdr_dev_t **out_dev, msisdr_dev_t *dev) {
     int r;
 
     if (libusb_kernel_driver_active(dev->dh, 0) == 1) {
         dev->driver_active = 1;
-
-#ifdef DETACH_KERNEL_DRIVER
-        if (!libusb_detach_kernel_driver(dev->dh, 0)) {
-            fprintf(stderr, "Detached kernel driver\n");
-        } else {
-            fprintf(stderr, "Detaching kernel driver failed!");
-            dev->driver_active = 0;
-            goto failed;
-        }
-#else
-        fprintf(stderr, "\nKernel driver is active, or device is "
-                "claimed by second instance of libmsisdr."
-                "\nIn the first case, please either detach"
-                " or blacklist the kernel module\n"
-                "(msi001 and msi2500), or enable automatic"
-                " detaching at compile time.\n\n");
-#endif
+        /* Always try to detach — on Linux this uses IOCTL_USB_DISCONNECT,
+         * on macOS libusb maps it to IOUSBDeviceOpenSeize which reclaims
+         * the device from the kernel driver.  Ignore failure (e.g. already
+         * detached or unsupported) so we can still attempt claim_interface. */
+        libusb_detach_kernel_driver(dev->dh, 0);
     } else {
         dev->driver_active = 0;
     }
@@ -262,6 +251,10 @@ int msisdr_open (msisdr_dev_t **p, uint32_t index) {
     dev->index = index;
 
     libusb_init(&dev->ctx);
+    /* On macOS, automatically detach any kernel driver when claiming the
+     * interface — avoids LIBUSB_ERROR_ACCESS when the IOKit driver holds
+     * the device after a previous session or system restart. */
+    libusb_set_auto_detach_kernel_driver(dev->ctx, 1);
     i_max = libusb_get_device_list(dev->ctx, &list);
 
     for (i = 0; i < i_max; i++) {

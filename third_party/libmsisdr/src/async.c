@@ -219,42 +219,68 @@ static void LIBUSB_CALL _libusb_callback (struct libusb_transfer *xfer) {
         /* pokračujeme dalším přenosem */
         if (libusb_submit_transfer(xfer) < 0) {
             fprintf( stderr, "error re-submitting URB on device %u\n", p->index);
-            goto failed;
+            goto cleanup_and_fail;
         }
     } else if (xfer->status == LIBUSB_TRANSFER_STALL) {
         fprintf( stderr, "transfer stall on device %u, clearing halt and retrying\n", p->index);
         libusb_clear_halt(p->dh, 0x81);
         if (libusb_submit_transfer(xfer) < 0) {
             fprintf( stderr, "resubmit after stall failed on device %u\n", p->index);
-            goto failed;
+            goto cleanup_and_fail;
         }
     } else if (xfer->status == LIBUSB_TRANSFER_OVERFLOW) {
-        fprintf( stderr, "transfer overflow on device %u, resubmitting\n", p->index);
+        libusb_clear_halt(p->dh, 0x81);
         if (libusb_submit_transfer(xfer) < 0) {
-            fprintf( stderr, "resubmit after overflow failed on device %u\n", p->index);
-            goto failed;
+            /* Resubmit failed — drop this slot silently.  Do NOT goto
+             * cleanup_and_fail: the remaining active transfers keep
+             * streaming.  The usb_stream_thread restart loop will
+             * recover full capacity after msisdr_read_async returns. */
+            for (size_t fi = 0; fi < p->xfer_buf_num; fi++) {
+                if (p->xfer[fi] == xfer) {
+                    libusb_free_transfer(p->xfer[fi]);
+                    if (p->xfer_buf[fi]) free(p->xfer_buf[fi]);
+                    p->xfer[fi] = NULL; p->xfer_buf[fi] = NULL;
+                    break;
+                }
+            }
         }
     } else if (xfer->status == LIBUSB_TRANSFER_TIMED_OUT) {
         if (libusb_submit_transfer(xfer) < 0) {
             fprintf( stderr, "resubmit after timeout failed on device %u\n", p->index);
-            goto failed;
+            goto cleanup_and_fail;
         }
     } else if (xfer->status == LIBUSB_TRANSFER_ERROR) {
         fprintf( stderr, "transfer error on device %u, resubmitting\n", p->index);
         if (libusb_submit_transfer(xfer) < 0) {
             fprintf( stderr, "resubmit after error failed on device %u\n", p->index);
-            goto failed;
+            goto cleanup_and_fail;
         }
     } else if (xfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
         fprintf( stderr, "USB device %u disconnected\n", p->index);
-        goto failed;
+        goto cleanup_and_fail;
     } else if (xfer->status != LIBUSB_TRANSFER_CANCELLED) {
         fprintf( stderr, "error async transfer status %d on device %u\n", xfer->status, p->index);
-        goto failed;
+        goto cleanup_and_fail;
     }
 
     return;
 
+cleanup_and_fail:
+    /* This transfer has completed its last callback and was NOT resubmitted.
+     * Remove it from the active pool before signalling ASYNC_FAILED so that
+     * failed_free's libusb_cancel_transfer loop skips it (UB on non-active
+     * transfers → SIGSEGV on macOS). */
+    if (p) {
+        for (size_t fi = 0; fi < p->xfer_buf_num; fi++) {
+            if (p->xfer[fi] == xfer) {
+                libusb_free_transfer(p->xfer[fi]);
+                if (p->xfer_buf[fi]) { free(p->xfer_buf[fi]); }
+                p->xfer[fi] = NULL;
+                p->xfer_buf[fi] = NULL;
+                break;
+            }
+        }
+    }
 failed:
     if (p && p->async_status == MSISDR_ASYNC_RUNNING) {
         p->async_status = MSISDR_ASYNC_FAILED;
@@ -438,6 +464,19 @@ retry_transfer:
         if ((r = libusb_set_interface_alt_setting(p->dh, 0, 3)) < 0) {
             fprintf( stderr, "BULK alt setting not available on device %u (%s), continuing anyway\n", p->index, libusb_error_name(r));
         }
+        /* On macOS/Apple:
+         * 1. Pre-clear halt: if a previous run left ep 0x81 in a stall state
+         *    (e.g. server killed mid-stream), clear it before we begin.
+         * 2. Send streaming-start so IOUSBLib will accept bulk IN submissions.
+         * 3. Clear halt again to flush any initial data burst from the device.
+         * On Linux the original order (stream start after transfers) is fine. */
+#if defined(__APPLE__)
+        libusb_clear_halt(p->dh, 0x81);  /* clear any stale halt */
+        usleep(10000);                    /* 10ms: let endpoint stabilize */
+        msisdr_streaming_start(p);
+        usleep(10000);                    /* 10ms: let device start streaming */
+        libusb_clear_halt(p->dh, 0x81);  /* flush initial device burst */
+#endif
         break;
     case MSISDR_TRANSFER_ISOC:
         fprintf( stderr, "libmsisdr: using ISOC transfer mode\n");
@@ -503,6 +542,16 @@ retry_transfer:
                 fprintf(stderr, "ISOC transfers failed, falling back to BULK\n");
                 p->transfer = MSISDR_TRANSFER_BULK;
                 goto retry_transfer;
+            }
+            /* For BULK failures: free unsubmitted transfers (i..N-1) and null them out
+             * so that the failed_free cancel loop only touches submitted transfers 0..i-1.
+             * Calling libusb_cancel_transfer on unsubmitted transfers is UB and crashes. */
+            {
+                size_t j;
+                for (j = i; j < p->xfer_buf_num; j++) {
+                    if (p->xfer[j]) { libusb_free_transfer(p->xfer[j]); p->xfer[j] = NULL; }
+                    if (p->xfer_buf[j]) { free(p->xfer_buf[j]); p->xfer_buf[j] = NULL; }
+                }
             }
             goto failed_free;
         }
